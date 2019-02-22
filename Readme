@@ -1,0 +1,115 @@
+-------------------------------------------------------------------------------
+                                Tema 3 - APD
+-------------------------------------------------------------------------------
+
+AUTOR: Smadu Razvan-Alexandru  335CB
+
+FISIRE INCLUSE
+  - ./homework.c
+  - ./Readme
+
+README
+  Organizarea proceselor si functiile acestora
+    In aceasta implementare, exista 1 proces care este master si care citeste 
+    imaginea, scrie imaginea rezultata si comanda procesele slave sa prelucreze 
+    bucati din imaginea originala.
+    
+    Executia procesului master
+      Prima data, procesul master citeste imaginea de pe hard-disk. Apoi, 
+      extrage metadata din imagine si face broadcast la toate procesele slave,
+      pentru ca acestea sa-si aloce memoria necesara primirii zonei de imagine.
+      In acelasi timp, si procesul master isi aloca o zona de memorie, intrucat
+      si el va participa la prelucrarea imaginii. Apoi acesta va trimite 
+      la fiecare (scatter) zona de memorie corespunzatoare fiecarui proces 
+      slave. Aceste zone sunt impartite in mod aproape egal (numarul de linii
+      poate varia +/-1) pentru ca toate procesele sa realizeze aceleasi operatii
+      in timpi aproximativi egali. Dupa ce s-a facut scatter (prin functia 
+      sendRecvChunk, care apeleaza sendChunk), se aplica filtrul. Dupa ce s-au
+      aplicat toate filtrele asupra imaginii, se face gather (prin functia 
+      sendRecvChunk, cu apelul recvChunk) in care zona initiala de memorie 
+      pentru imaginea originala, se suprascrie cu imaginile prelucrate de 
+      fiecare proces in parte + procesul master. Ulterior, se scrie imaginea 
+      pe hard-disk si se curata memoria auxiliara utilizata.
+    
+    Executia procesului slave
+      Procesele slave executa in paralel aceleasi operatii, pe zone diferite 
+      ale imaginii de prelucrat. Prima data, acestea primesc informatiile despre
+      imagine (un sir de caractere ce contine tipul, valoarea maxima si 
+      dimensiunile imaginii). Apoi, fiecare proces slave isi aloca memoria 
+      pentru cat trebuie sa prelucreze. Apoi, asteapta sa primeasca zona de 
+      imagine pe care trebuie sa o prelucreze. Aceasta zona depinde de rank-ul 
+      fiecarul proces slave si consta in liniile pe care le are de prelucrat din
+      imagine. Dupa ce fiecare proces slave a primit chunk-ul pe care trebuie 
+      sa-l prelucreze, aplica fiecare filtru in parte pe acea zona. Ulterior,
+      trimite imaginea rezultata la procesul master care la randul sau 
+      reasambleaza imaginea si o scrie pe disk.
+
+    Aplicarea filtrelor
+      Fie ca este vorba de procesul master sau slave, acesta va aplica acelasi 
+      algoritm pentru filtre. Filtrele care trebuie aplicate sunt predefinite 
+      in functia applyFilters(). Intrucat filtrul se aplica pe imaginea 
+      originala, trebuie sa se realizeze o copie a acesteia, la fiecare filtru 
+      nou aplicat. Acest lucru se realizeaza in functia solveBoundaries()
+      care, de asemenea, cere de la procesele vecine (rank - 1 si rank + 1) 
+      ultima, respectiv prima linie din imaginea pe care o au de prelucrat. 
+      Acest lucru este necesar pentru a calcula valorile pixelilor care se afla
+      la granita intre procese. Primul (procesul cu rank-ul 0) si ultimul vor 
+      trimite si primi date de la procesele care exista. Prin aceasta metoda,
+      se trimit mai putine date pe canalul de comunicatie, decat daca, 
+      de exemplu, dupa fiecare aplicare de filtru, sa se trimita imaginile la 
+      procesul master si sa se reia trimiterea si aplicarea filtrelor.
+      De aceea, matricea din care se iau valorile pixelilor imaginii prelucrate 
+      anterior are inaltimea cu 2 mai mare decat a imaginii rezultat.
+
+      Fiecare filtru este aplicat pe pixelii interiori imaginii originale, si 
+      pe fiecare canal, ca fiind suma produselor dintre valorile pixelilor si 
+      elementele din filtru.
+    
+    Structura imaginii
+      Structura care retine detalii despre imagine contine tipul imaginii, 
+      valoarea maxima a pixelilor, dimensiunile imaginii si matricea de pixeli
+      care poate fi formata din pixeli color (cu r, g, si b) sau alg-negru (cu 
+      w).
+
+    "Primitivele" sendChunk() si recvChunk() si functia sendRecvChunk()
+      Functiile sendChunk() si recvChunk() sunt folosite pentru a abstractiza 
+      modul de trimitere al unei matrici care nu este retinuta in memorie 
+      liniarizat, fiecare linie fiind precizata de un pointer. Aceste functii 
+      sunt simetrice si aloca o zona de memorie unde pun, respectiv iau datele 
+      care sunt trimise sau primite folosint MPI_Send(), respectiv MPI_Recv().
+      Functia sendRecvChunk() este o functie "generica" avand posibilitatea de 
+      a trimite/primi date folosind acelasi apel si specificand doar care 
+      primitiva sa se execute. Aceasta functie actioneaza ca un gather atunci 
+      cand se face receive si ca un scatter atunci cand se face send. Practic
+      ia/trimite date dintr-o matrice de la/catre celelalte procese.
+
+    Numarul de pachete trimise este egal cu 2 * (N - 1) * (F + 1), unde N 
+    reprezinta numarul de procese, iar F reprezinta numarul de filtre care 
+    trebuie aplicate. 2-ul se datoreaza faptului ca se face ata send cat si 
+    receive.
+
+    Scalabilitatea executiei
+      Executia este scalabila cu numarul de procese care executa, atata timp cat
+      timpul de executie al fiecarui proces este mai mare decat timpul de a 
+      creea un proces. Pe teste realizate local, pe o imagine de 5000x3334 
+      color si aplicand 16 filtre, alese in mod aleator, timpul de executie al 
+      intregii aplicatii (de cand se da [Enter] la comanda si pana cand apare 
+      prompt-ul dupa finalizarea executiei) este undeva la 29 secunde, pe un 
+      procesor i7-7700HQ. Acest timp este pentru un singur proces. Pe executia 
+      aceluiasi program, cu aceleasi filtre, dar pe 2 procese, timpul este 
+      undeva la 15-16 secunde, aproape cu 50% mai rapid decat utilizand un 
+      singur proces. La executia pe 4 procese, timpul este undeva la 9-10 
+      secunde, o reducere cu aproape 30-40% fata de 2 procese. Pe 8 procese,
+      timpul este de 8-9 secunde, o diferenta de sub 10% fata de 4 procese.
+    
+      Pe cluster-ul facultatii (fara a folosi qsub), pe aceeasi imagine si 16 
+      filtre aleatoriu alese timput de executie pe 1 singur proces, este de 1 
+      minut si 10 secunte. Pe 2 procese, timpul este de 37 secunde, iar pe 4 
+      procese, timpul este de 24 secunde.
+
+      Testele descrise mai sus demonstreaza, nu numai teoretic, faptul ca 
+      implementarea se scaleaza la numarul de procese utilizate.
+    
+      Sincronizarea intre procese se face atunci cand se asteapta primirea de 
+      linii (receive) cand se trece de la un filtru la altul.
+      
